@@ -1,0 +1,37 @@
+<mxfile host="Electron">
+  <diagram name="Page-1" id="mJp_Jw57niJrsJh1ZW65">
+    <mxGraphModel dx="1414" dy="841" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="v9lik3XSF_6uCCSgISvr-1" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Bastion VM" vertex="1">
+          <mxGeometry height="60" width="120" x="185" y="280" as="geometry" />
+        </mxCell>
+        <mxCell id="v9lik3XSF_6uCCSgISvr-3" edge="1" parent="1" source="v9lik3XSF_6uCCSgISvr-2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=3;endArrow=none;endFill=0;" target="v9lik3XSF_6uCCSgISvr-1" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="v9lik3XSF_6uCCSgISvr-2" parent="1" style="ellipse;shape=cloud;whiteSpace=wrap;html=1;" value="Home Network" vertex="1">
+          <mxGeometry height="80" width="130" x="180" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="v9lik3XSF_6uCCSgISvr-4" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="10.0.0.50" vertex="1">
+          <mxGeometry height="30" width="60" x="250" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="v9lik3XSF_6uCCSgISvr-11" edge="1" parent="1" source="v9lik3XSF_6uCCSgISvr-5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=none;endFill=0;strokeWidth=2;" target="v9lik3XSF_6uCCSgISvr-6" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="v9lik3XSF_6uCCSgISvr-5" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Registry&lt;br&gt;10.10.0.3" vertex="1">
+          <mxGeometry height="60" width="120" x="50" y="550" as="geometry" />
+        </mxCell>
+        <mxCell id="v9lik3XSF_6uCCSgISvr-8" edge="1" parent="1" source="v9lik3XSF_6uCCSgISvr-6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=none;endFill=0;strokeWidth=3;" target="v9lik3XSF_6uCCSgISvr-1" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="v9lik3XSF_6uCCSgISvr-6" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Proxmox OCP Bridge" vertex="1">
+          <mxGeometry height="60" width="120" x="185" y="380" as="geometry" />
+        </mxCell>
+        <mxCell id="v9lik3XSF_6uCCSgISvr-10" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="10.10.0.2" vertex="1">
+          <mxGeometry height="30" width="60" x="250" y="340" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
