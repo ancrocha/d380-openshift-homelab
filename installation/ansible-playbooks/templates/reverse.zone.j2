@@ -1,0 +1,13 @@
+; Managed by Ansible - tasks/configure-dns.yaml
+$TTL 300
+@   IN SOA dns.{{ lab_domain }}. admin.{{ lab_domain }}. ( {{ dns_zone_serial }} 3600 900 604800 300 )
+@   IN NS  dns.{{ lab_domain }}.
+
+{# one PTR per address: wildcards are skipped and the first name wins (api before api-int) #}
+{% set seen = [] %}
+{% for record in dns_records + dns_ocp_records if '*' not in record.name %}
+{% if record.ip not in seen %}
+{{ "%-4s" | format(record.ip.split('.')[3]) }} IN PTR {{ record.name }}.{{ lab_domain }}.
+{% set _ = seen.append(record.ip) %}
+{% endif %}
+{% endfor %}

@@ -1,0 +1,182 @@
+---
+- name: change hostname
+  ansible.builtin.hostname:
+    name: bastion.lab.local
+  become: true
+
+- name: gather network facts
+  ansible.builtin.setup:
+    gather_subset: network
+
+- name: detect home and OCP interfaces
+  ansible.builtin.set_fact:
+    # the NIC that is up and holds the default route
+    if_home: "{{ ansible_default_ipv4.interface }}"
+    # the other non-loopback NIC (no config, no default route)
+    if_ocp: >-
+      {{ ansible_facts.interfaces
+         | reject('equalto', 'lo')
+         | reject('equalto', ansible_default_ipv4.interface)
+         | select('match', '^(en|eth)')
+         | list | first }}
+
+- name: show detected interfaces
+  ansible.builtin.debug:
+    msg: "home={{ if_home }} ocp={{ if_ocp }}"
+
+- name: configure OCP interface
+  community.general.nmcli:
+    type: ethernet
+    conn_name: "{{ if_ocp }}"
+    ifname: "{{ if_ocp }}"
+    ip4: 10.10.0.2/24
+    method4: manual
+    # no dns4 here: the lab DNS is added to this connection in step 04 (tasks/bastion-lab-dns.yaml)
+    zone: internal
+    autoconnect: true
+    state: present
+  become: true
+
+- name: install pip and requests
+  ansible.builtin.dnf:
+    name:
+      - python3-pip
+      - python3-requests
+    state: present
+  become: true
+
+# Library used by community.general.proxmox_kvm (tasks/create-vms.yaml).
+# Installed for the current user (no become) because the module runs with this user's python.
+- name: install proxmoxer
+  ansible.builtin.pip:
+    name: proxmoxer
+    extra_args: --user
+
+# ---- Internet access for the OCP network (NAT through the home NIC) ----
+- name: install firewalld
+  ansible.builtin.dnf:
+    name: firewalld
+    state: present
+  become: true
+
+- name: enable and start firewalld
+  ansible.builtin.service:
+    name: firewalld
+    state: started
+    enabled: true
+  become: true
+
+- name: find the home connection profile
+  ansible.builtin.command: nmcli -g GENERAL.CONNECTION dev show {{ if_home }}
+  register: home_con
+  changed_when: false
+
+- name: put the home connection in the external zone
+  ansible.builtin.command: nmcli con mod "{{ home_con.stdout }}" connection.zone external
+  become: true
+  changed_when: false
+
+- name: assign the home NIC to the external zone
+  ansible.posix.firewalld:
+    zone: external
+    interface: "{{ if_home }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  become: true
+
+- name: assign the OCP NIC to the internal zone
+  ansible.posix.firewalld:
+    zone: internal
+    interface: "{{ if_ocp }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  become: true
+
+- name: enable masquerade on the external zone
+  ansible.posix.firewalld:
+    zone: external
+    masquerade: true
+    permanent: true
+    immediate: true
+    state: enabled
+  become: true
+
+# firewalld 1.x needs an explicit policy to forward internal -> external
+- name: list firewalld policies
+  ansible.builtin.command: firewall-cmd --permanent --get-policies
+  register: fw_policies
+  changed_when: false
+  become: true
+
+- name: create the internal -> external forwarding policy
+  ansible.builtin.command: "firewall-cmd --permanent {{ item }}"
+  loop:
+    - --new-policy int-to-ext
+    - --policy int-to-ext --add-ingress-zone internal
+    - --policy int-to-ext --add-egress-zone external
+    - --policy int-to-ext --set-target ACCEPT
+    - --policy int-to-ext --add-masquerade
+  become: true
+  when: "'int-to-ext' not in fw_policies.stdout.split()"
+  register: fw_policy_created
+
+- name: reload firewalld
+  ansible.builtin.command: firewall-cmd --reload
+  become: true
+  when: fw_policy_created is changed
+
+- name: enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_file: /etc/sysctl.d/90-fwd.conf
+    sysctl_set: true
+    reload: true
+  become: true
+
+# ---- Lab CA and service certificates ----
+# One CA signs every certificate in the lab. Nodes only have to trust lab-ca.pem.
+- name: create the lab CA directory
+  ansible.builtin.file:
+    path: "{{ lab_ca_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: create the lab CA (key and certificate)
+  ansible.builtin.command:
+    cmd: >-
+      openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes
+      -keyout lab-ca.key -out lab-ca.pem -subj "/CN=Lab Root CA/O=lab.local"
+      -addext "basicConstraints=critical,CA:TRUE"
+      -addext "keyUsage=critical,keyCertSign,cRLSign"
+    chdir: "{{ lab_ca_dir }}"
+    creates: "{{ lab_ca_dir }}/lab-ca.pem"
+
+- name: generate a certificate for each service
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      umask 077
+      openssl req -newkey rsa:2048 -nodes -keyout {{ item }}.key -out {{ item }}.csr -subj "/CN={{ item }}"
+      openssl x509 -req -in {{ item }}.csr -CA lab-ca.pem -CAkey lab-ca.key -CAcreateserial -days 825 -sha256 \
+        -out {{ item }}.crt -extfile <(printf "subjectAltName=DNS:{{ item }}\nextendedKeyUsage=serverAuth")
+      cat {{ item }}.crt lab-ca.pem > {{ item }}.fullchain.crt
+    chdir: "{{ lab_ca_dir }}"
+    creates: "{{ lab_ca_dir }}/{{ item }}.fullchain.crt"
+    executable: /bin/bash
+  loop: "{{ lab_certs }}"
+
+- name: trust the lab CA on the bastion
+  ansible.builtin.copy:
+    src: "{{ lab_ca_dir }}/lab-ca.pem"
+    dest: /etc/pki/ca-trust/source/anchors/lab-ca.pem
+    mode: "0644"
+  become: true
+  register: bastion_ca_trust
+
+- name: update the system trust store
+  ansible.builtin.command: update-ca-trust
+  become: true
+  when: bastion_ca_trust is changed

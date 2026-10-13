@@ -1,0 +1,13 @@
+---
+# Registers a RHEL host with Red Hat so dnf can use the repositories.
+- name: load Red Hat credentials
+  ansible.builtin.include_vars:
+    file: vars/secrets.yaml
+
+- name: register with Red Hat
+  community.general.redhat_subscription:
+    username: "{{ rh_username }}"
+    password: "{{ rh_password }}"
+    state: present
+  become: true
+  no_log: true

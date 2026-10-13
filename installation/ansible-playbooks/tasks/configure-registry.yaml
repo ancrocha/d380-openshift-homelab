@@ -1,0 +1,130 @@
+---
+# Prepares the registry host and installs the mirror registry (Quay).
+# Runs over SSH from the bastion; certificates come from the lab CA on the bastion.
+- name: load secrets
+  ansible.builtin.include_vars:
+    file: vars/secrets.yaml
+
+- name: set the hostname
+  ansible.builtin.hostname:
+    name: "{{ quay_hostname }}"
+  become: true
+
+- name: install packages
+  ansible.builtin.dnf:
+    name:
+      - podman
+      - polkit
+      - firewalld
+      - tar
+    state: present
+  become: true
+
+- name: enable and start polkit and firewalld
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop:
+    - polkit
+    - firewalld
+  become: true
+
+- name: open the registry port
+  ansible.posix.firewalld:
+    port: 8443/tcp
+    permanent: true
+    immediate: true
+    state: enabled
+  become: true
+
+# The installer runs Quay as systemd user services, which need lingering for this user.
+- name: allow the user to enable linger
+  ansible.builtin.copy:
+    dest: /etc/polkit-1/rules.d/50-enable-linger.rules
+    mode: "0644"
+    content: |
+      polkit.addRule(function(action, subject) {
+          if (action.id == "org.freedesktop.login1.set-user-linger" &&
+              subject.user == "{{ ansible_user }}") {
+              return polkit.Result.YES;
+          }
+      });
+  become: true
+
+- name: enable linger for the user
+  ansible.builtin.command: loginctl enable-linger {{ ansible_user }}
+  args:
+    creates: "/var/lib/systemd/linger/{{ ansible_user }}"
+  become: true
+
+- name: create the quay directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0755"
+  loop:
+    - "{{ quay_root }}"
+    - "{{ quay_root }}/certs"
+  become: true
+
+- name: copy the registry certificate and key from the bastion
+  ansible.builtin.copy:
+    src: "{{ lab_ca_dir }}/{{ item.name }}"
+    dest: "{{ quay_root }}/certs/{{ item.name }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { name: "{{ quay_hostname }}.fullchain.crt", mode: "0644" }
+    - { name: "{{ quay_hostname }}.key", mode: "0600" }
+
+- name: trust the lab CA on the registry host
+  ansible.builtin.copy:
+    src: "{{ lab_ca_dir }}/lab-ca.pem"
+    dest: /etc/pki/ca-trust/source/anchors/lab-ca.pem
+    mode: "0644"
+  become: true
+  register: registry_ca_trust
+
+- name: update the system trust store
+  ansible.builtin.command: update-ca-trust
+  become: true
+  when: registry_ca_trust is changed
+
+- name: download the mirror registry installer
+  ansible.builtin.get_url:
+    url: https://mirror.openshift.com/pub/cgw/mirror-registry/latest/mirror-registry-amd64.tar.gz
+    dest: "{{ quay_root }}/mirror-registry-amd64.tar.gz"
+    mode: "0644"
+    timeout: 120
+
+- name: create the installer directory
+  ansible.builtin.file:
+    path: "{{ quay_root }}/mirror-registry"
+    state: directory
+    mode: "0755"
+
+- name: extract the mirror registry installer
+  ansible.builtin.unarchive:
+    src: "{{ quay_root }}/mirror-registry-amd64.tar.gz"
+    dest: "{{ quay_root }}/mirror-registry"
+    remote_src: true
+    creates: "{{ quay_root }}/mirror-registry/mirror-registry"
+
+- name: install the mirror registry (Quay)
+  ansible.builtin.command:
+    cmd: >-
+      ./mirror-registry install
+      --quayHostname {{ quay_hostname }}
+      --quayRoot {{ quay_root }}
+      --quayStorage {{ quay_root }}/storage
+      --initUser {{ quay_init_user }}
+      --initPassword {{ quay_init_password }}
+      --sslCert {{ quay_root }}/certs/{{ quay_hostname }}.fullchain.crt
+      --sslKey {{ quay_root }}/certs/{{ quay_hostname }}.key
+    chdir: "{{ quay_root }}/mirror-registry"
+    creates: "{{ quay_root }}/quay-config"
+  no_log: true
+  async: 1800
+  poll: 15

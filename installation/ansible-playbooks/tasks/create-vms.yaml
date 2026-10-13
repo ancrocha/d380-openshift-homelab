@@ -1,0 +1,141 @@
+---
+# Creates the lab VMs on Proxmox through its API (VM list is in vars/main.yaml).
+# - VMs with a `template` key are cloned from a Proxmox template and configured with cloud-init (RHEL helper VMs).
+# - VMs without it are created empty with a boot ISO attached (e.g. RHCOS for OpenShift nodes).
+# Only the VMs named in `vm_names` are handled, so each step creates its own VM when its turn comes.
+- name: select the VMs to create
+  ansible.builtin.set_fact:
+    selected_vms: "{{ proxmox_vms | selectattr('name', 'in', vm_names) | list }}"
+
+- name: load Proxmox secrets
+  ansible.builtin.include_vars:
+    file: vars/secrets.yaml
+
+- name: list existing VMs
+  community.general.proxmox_vm_info:
+    api_host: "{{ proxmox_api_host }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_token_id: "{{ proxmox_api_token_id }}"
+    api_token_secret: "{{ proxmox_api_token_secret }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    node: "{{ proxmox_node }}"
+    type: qemu
+  register: pve_vms
+
+- name: remember existing VM names
+  ansible.builtin.set_fact:
+    existing_vm_names: "{{ pve_vms.proxmox_vms | map(attribute='name') | list }}"
+
+# ---- Template based VMs (cloud-init) ----
+- name: clone VM from template
+  community.general.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_token_id: "{{ proxmox_api_token_id }}"
+    api_token_secret: "{{ proxmox_api_token_secret }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    node: "{{ proxmox_node }}"
+    clone: "{{ item.template }}"
+    newid: "{{ item.vmid }}"
+    name: "{{ item.name }}"
+    full: true
+    storage: "{{ item.storage | default(proxmox_vm_storage) }}"
+    timeout: 900
+  loop: "{{ selected_vms | selectattr('template', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.name not in existing_vm_names
+
+- name: configure VM and cloud-init (CPU, memory, network, user, SSH key)
+  community.general.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_token_id: "{{ proxmox_api_token_id }}"
+    api_token_secret: "{{ proxmox_api_token_secret }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ item.vmid }}"
+    update: true
+    # without this, update silently skips net/disk changes and the clone keeps the template NIC (vmbr0)
+    update_unsafe: true
+    cores: "{{ item.cores }}"
+    memory: "{{ item.memory_mb }}"
+    net:
+      net0: "virtio={{ item.mac }},bridge={{ item.bridge }}"
+    onboot: true
+    ciuser: "{{ proxmox_ci_user }}"
+    sshkeys: "{{ lookup('file', proxmox_ssh_public_key_file) }}"
+    # VMs with an `ip`: static address, gateway and DNS from cloud-init.
+    ipconfig: "{{ {'ipconfig0': 'ip=' ~ item.ip ~ '/24,gw=' ~ item.gateway} if item.ip is defined else omit }}"
+    nameservers: "{{ ([item.dns] if item.dns is defined else lab_upstream_dns) if item.ip is defined else omit }}"
+    searchdomains: "{{ [proxmox_search_domain] if item.ip is defined else omit }}"
+    # VMs without an `ip`: everything (address, gateway, DNS, search domain) comes from the lab DHCP.
+    # Proxmox's own network config always carries a resolver (the Proxmox host's when none is set),
+    # and cloud-init would write it over DHCP; this network-only snippet says "DHCP" and nothing else.
+    cicustom: "{{ omit if item.ip is defined else 'network=' ~ proxmox_dhcp_network_snippet }}"
+    state: present
+  loop: "{{ selected_vms | selectattr('template', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.name not in existing_vm_names
+
+- name: resize VM disk
+  community.general.proxmox_disk:
+    api_host: "{{ proxmox_api_host }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_token_id: "{{ proxmox_api_token_id }}"
+    api_token_secret: "{{ proxmox_api_token_secret }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    vmid: "{{ item.vmid }}"
+    disk: "{{ proxmox_template_disk }}"
+    size: "{{ item.disk_gb }}G"
+    state: resized
+  loop: "{{ selected_vms | selectattr('template', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.name not in existing_vm_names
+
+# ---- ISO based VMs ----
+- name: create VM with boot ISO
+  community.general.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_token_id: "{{ proxmox_api_token_id }}"
+    api_token_secret: "{{ proxmox_api_token_secret }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    node: "{{ proxmox_node }}"
+    name: "{{ item.name }}"
+    vmid: "{{ item.vmid }}"
+    cores: "{{ item.cores }}"
+    sockets: 1
+    cpu: host
+    memory: "{{ item.memory_mb }}"
+    machine: q35
+    scsihw: virtio-scsi-single
+    scsi:
+      scsi0: "{{ item.storage | default(proxmox_vm_storage) }}:{{ item.disk_gb }},discard=on,iothread=1"
+    ide:
+      ide2: "{{ item.iso | default(proxmox_iso) }},media=cdrom"
+    net:
+      net0: "virtio={{ item.mac }},bridge={{ item.bridge }}"
+    agent: enabled=1
+    onboot: true
+    state: present
+  loop: "{{ selected_vms | rejectattr('template', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# ---- All VMs ----
+- name: start VM
+  community.general.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_token_id: "{{ proxmox_api_token_id }}"
+    api_token_secret: "{{ proxmox_api_token_secret }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    node: "{{ proxmox_node }}"
+    name: "{{ item.name }}"
+    state: started
+  loop: "{{ selected_vms }}"
+  loop_control:
+    label: "{{ item.name }}"

@@ -1,0 +1,154 @@
+---
+# One tag per step of the guides, run in order: bastion, dhcp, dns, registry.
+# Each VM step first creates its VM on Proxmox (from the bastion), then configures it over SSH,
+# so a VM is only powered on once the steps before it are done.
+
+- name: Bastion
+  hosts: bastion
+  gather_facts: true
+  vars_files:
+    - vars/main.yaml
+  tasks:
+    - name: configure bastion host
+      include_tasks:
+        file: tasks/configure-bastion.yaml
+        apply:
+          tags: bastion
+      tags: bastion
+
+# ---- 03 - DHCP ----
+- name: DHCP server - create the VM
+  hosts: bastion
+  gather_facts: true
+  vars_files:
+    - vars/main.yaml
+  tasks:
+    - name: create the dhcp VM on Proxmox
+      include_tasks:
+        file: tasks/create-vms.yaml
+        apply:
+          tags: dhcp
+      vars:
+        vm_names: [dhcp]
+      tags: dhcp
+
+# The VM plays never gather facts, so they do not try to connect when another tag is used.
+- name: DHCP server - configure
+  hosts: dhcp
+  gather_facts: false
+  vars_files:
+    - vars/main.yaml
+  tasks:
+    - name: wait until the VM answers over SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+      tags: dhcp
+
+    - name: register with Red Hat
+      include_tasks:
+        file: tasks/register-rhel.yaml
+        apply:
+          tags: dhcp
+      tags: dhcp
+
+    - name: configure the DHCP server
+      include_tasks:
+        file: tasks/configure-dhcp.yaml
+        apply:
+          tags: dhcp
+      tags: dhcp
+
+# ---- 04 - DNS ----
+- name: DNS server - create the VM
+  hosts: bastion
+  gather_facts: true
+  vars_files:
+    - vars/main.yaml
+  tasks:
+    - name: create the dns VM on Proxmox
+      include_tasks:
+        file: tasks/create-vms.yaml
+        apply:
+          tags: dns
+      vars:
+        vm_names: [dns]
+      tags: dns
+
+- name: DNS server - configure
+  hosts: dns
+  gather_facts: false
+  vars_files:
+    - vars/main.yaml
+  tasks:
+    - name: wait until the VM answers over SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+      tags: dns
+
+    - name: register with Red Hat
+      include_tasks:
+        file: tasks/register-rhel.yaml
+        apply:
+          tags: dns
+      tags: dns
+
+    - name: configure the DNS server
+      include_tasks:
+        file: tasks/configure-dns.yaml
+        apply:
+          tags: dns
+      tags: dns
+
+- name: DNS server - bastion uses the lab DNS
+  hosts: bastion
+  gather_facts: false
+  vars_files:
+    - vars/main.yaml
+  tasks:
+    - name: point the bastion at the lab DNS
+      include_tasks:
+        file: tasks/bastion-lab-dns.yaml
+        apply:
+          tags: dns
+      tags: dns
+
+# ---- 05 - Registry (needs DHCP and DNS up) ----
+- name: Registry - create the VM
+  hosts: bastion
+  gather_facts: true
+  vars_files:
+    - vars/main.yaml
+  tasks:
+    - name: create the registry VM on Proxmox
+      include_tasks:
+        file: tasks/create-vms.yaml
+        apply:
+          tags: registry
+      vars:
+        vm_names: [registry]
+      tags: registry
+
+- name: Registry - configure
+  hosts: registry
+  gather_facts: false
+  vars_files:
+    - vars/main.yaml
+  tasks:
+    - name: wait until the VM answers over SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+      tags: registry
+
+    - name: register with Red Hat
+      include_tasks:
+        file: tasks/register-rhel.yaml
+        apply:
+          tags: registry
+      tags: registry
+
+    - name: configure registry host and install Quay
+      include_tasks:
+        file: tasks/configure-registry.yaml
+        apply:
+          tags: registry
+      tags: registry

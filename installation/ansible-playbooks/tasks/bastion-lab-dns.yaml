@@ -1,0 +1,69 @@
+---
+# Makes the bastion resolve lab.local through the lab DNS server, once that server exists (step 04).
+# The lab DNS is set on the OCP connection with a better priority than the home DNS, so it is asked first;
+# it forwards public names upstream, and the home DNS stays as a fallback when the DNS VM is down.
+- name: find the OCP interface (the one that reaches the DNS server)
+  ansible.builtin.command: ip -o route get {{ dns_server_ip }}
+  register: route_to_dns
+  changed_when: false
+
+- name: remember the OCP interface
+  ansible.builtin.set_fact:
+    lab_if: "{% set words = route_to_dns.stdout.split() %}{{ words[words.index('dev') + 1] }}"
+
+- name: find its connection profile
+  ansible.builtin.command: nmcli -g GENERAL.CONNECTION dev show {{ lab_if }}
+  register: lab_con
+  changed_when: false
+
+- name: read its current DNS settings
+  ansible.builtin.command: nmcli -g ipv4.dns,ipv4.dns-search,ipv4.dns-priority con show "{{ lab_con.stdout }}"
+  register: lab_con_dns
+  changed_when: false
+
+- name: use the lab DNS and search domain on the OCP connection
+  ansible.builtin.command: >-
+    nmcli con mod "{{ lab_con.stdout }}"
+    ipv4.dns {{ dns_server_ip }}
+    ipv4.dns-search {{ lab_domain }}
+    ipv4.dns-priority 50
+  become: true
+  when: lab_con_dns.stdout_lines != [dns_server_ip, lab_domain, '50']
+  register: lab_dns_set
+
+# reapply changes the running connection without taking it down
+- name: apply the DNS settings
+  ansible.builtin.command: nmcli device reapply {{ lab_if }}
+  become: true
+  when: lab_dns_set is changed
+
+# cloud-init configured the bastion's DNS and wrote 99-cloud-init.conf with "dns = none", so NetworkManager
+# never writes /etc/resolv.conf and the settings above would not take effect. This file is read after it
+# (conf.d files are read in alphabetical order) and gives /etc/resolv.conf back to NetworkManager.
+- name: let NetworkManager manage /etc/resolv.conf
+  ansible.builtin.copy:
+    dest: /etc/NetworkManager/conf.d/99-zz-lab-dns.conf
+    mode: "0644"
+    content: |
+      # Managed by Ansible - tasks/bastion-lab-dns.yaml
+      # Overrides "dns = none" from 99-cloud-init.conf, so NetworkManager writes /etc/resolv.conf.
+      [main]
+      dns=default
+  become: true
+  register: nm_dns_conf
+
+# a reload re-reads conf.d and rewrites /etc/resolv.conf from the connections
+- name: reload NetworkManager
+  ansible.builtin.service:
+    name: NetworkManager
+    state: reloaded
+  become: true
+  when: nm_dns_conf is changed or lab_dns_set is changed
+
+- name: check that a lab name resolves
+  ansible.builtin.command: getent hosts dns.{{ lab_domain }}
+  register: lab_dns_check
+  retries: 5
+  delay: 2
+  until: lab_dns_check.rc == 0
+  changed_when: false

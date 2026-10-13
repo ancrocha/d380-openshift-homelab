@@ -1,0 +1,14 @@
+; Managed by Ansible - tasks/configure-dns.yaml
+$TTL 300
+@   IN SOA dns.{{ lab_domain }}. admin.{{ lab_domain }}. ( {{ dns_zone_serial }} 3600 900 604800 300 )
+@   IN NS  dns.{{ lab_domain }}.
+
+; --- lab infrastructure ---
+{% for record in dns_records %}
+{{ "%-16s" | format(record.name) }} IN A {{ record.ip }}
+{% endfor %}
+
+; --- cluster {{ ocp_cluster_name }} ---
+{% for record in dns_ocp_records %}
+{{ "%-16s" | format(record.name) }} IN A {{ record.ip }}
+{% endfor %}

@@ -1,0 +1,78 @@
+---
+# Installs and configures the DNS server (bind) of the lab.
+# It owns lab.local and the reverse zone, and forwards everything else upstream.
+- name: set the hostname
+  ansible.builtin.hostname:
+    name: "dns.{{ lab_domain }}"
+  become: true
+
+- name: install bind and firewalld
+  ansible.builtin.dnf:
+    name:
+      - bind
+      - bind-utils
+      - firewalld
+    state: present
+  become: true
+
+- name: enable and start firewalld
+  ansible.builtin.service:
+    name: firewalld
+    state: started
+    enabled: true
+  become: true
+
+- name: open the DNS service
+  ansible.posix.firewalld:
+    service: dns
+    permanent: true
+    immediate: true
+    state: enabled
+  become: true
+
+- name: write named.conf
+  ansible.builtin.template:
+    src: templates/named.conf.j2
+    dest: /etc/named.conf
+    owner: root
+    group: named
+    mode: "0640"
+    validate: named-checkconf %s
+  become: true
+  register: named_conf
+
+- name: write the forward zone
+  ansible.builtin.template:
+    src: templates/forward.zone.j2
+    dest: "/var/named/{{ lab_domain }}.zone"
+    owner: root
+    group: named
+    mode: "0640"
+    validate: named-checkzone {{ lab_domain }} %s
+  become: true
+  register: forward_zone
+
+- name: write the reverse zone
+  ansible.builtin.template:
+    src: templates/reverse.zone.j2
+    dest: "/var/named/{{ dns_reverse_zone }}.zone"
+    owner: root
+    group: named
+    mode: "0640"
+    validate: named-checkzone {{ dns_reverse_zone }} %s
+  become: true
+  register: reverse_zone
+
+- name: enable and start named
+  ansible.builtin.service:
+    name: named
+    state: started
+    enabled: true
+  become: true
+
+- name: reload named when the configuration changed
+  ansible.builtin.service:
+    name: named
+    state: reloaded
+  become: true
+  when: named_conf is changed or forward_zone is changed or reverse_zone is changed

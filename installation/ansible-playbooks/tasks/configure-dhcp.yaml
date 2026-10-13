@@ -1,0 +1,55 @@
+---
+# Installs and configures the DHCP server of the OCP network.
+# It hands out addresses to the OpenShift nodes, which boot from RHCOS and have no cloud-init.
+- name: set the hostname
+  ansible.builtin.hostname:
+    name: "dhcp.{{ lab_domain }}"
+  become: true
+
+- name: install dhcp-server and firewalld
+  ansible.builtin.dnf:
+    name:
+      - dhcp-server
+      - firewalld
+    state: present
+  become: true
+
+- name: enable and start firewalld
+  ansible.builtin.service:
+    name: firewalld
+    state: started
+    enabled: true
+  become: true
+
+- name: open the DHCP service
+  ansible.posix.firewalld:
+    service: dhcp
+    permanent: true
+    immediate: true
+    state: enabled
+  become: true
+
+- name: write dhcpd.conf
+  ansible.builtin.template:
+    src: templates/dhcpd.conf.j2
+    dest: /etc/dhcp/dhcpd.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: dhcpd -t -cf %s
+  become: true
+  register: dhcpd_conf
+
+- name: enable and start dhcpd
+  ansible.builtin.service:
+    name: dhcpd
+    state: started
+    enabled: true
+  become: true
+
+- name: restart dhcpd when the configuration changed
+  ansible.builtin.service:
+    name: dhcpd
+    state: restarted
+  become: true
+  when: dhcpd_conf is changed

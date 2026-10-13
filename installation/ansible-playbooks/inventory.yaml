@@ -1,0 +1,21 @@
+---
+# Plays target the host names (bastion, dhcp, dns, registry), not the groups.
+all:
+  children:
+    control:
+      hosts:
+        bastion:
+          ansible_connection: local
+    # Reached over SSH from the bastion, as the user cloud-init created
+    lab_nodes:
+      vars:
+        ansible_user: cloud-user
+        ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+        ansible_ssh_common_args: -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+      hosts:
+        dhcp:
+          ansible_host: 10.10.0.3
+        dns:
+          ansible_host: 10.10.0.4
+        registry:
+          ansible_host: 10.10.0.5

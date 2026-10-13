@@ -9,6 +9,9 @@ This is not a production ready deployment, the lab is optimized for learning onl
 
 Feel free to learn, use and modify it.
 
+## AI Disclaimer.
+I used AI to help me with some parts of the code and to better organize the steps. The main architecture and design decisions are still my own thoughts. 
+
 ## Part 1 - The Hardware
 
 This section I describe the physical part of my home lab including the server and network. [hardware.md](hardware/hardware.md)

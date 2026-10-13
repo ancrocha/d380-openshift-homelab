@@ -1,0 +1,112 @@
+---
+# Proxmox connection (the token itself lives in vars/secrets.yaml)
+proxmox_api_host: 10.0.0.6        # CHANGE: Proxmox host IP on the home network
+proxmox_api_user: root@pam
+proxmox_api_token_id: ansible
+proxmox_validate_certs: false      # Proxmox uses a self-signed certificate
+proxmox_node: proxmox                  # CHANGE: node name shown in the Proxmox UI
+proxmox_vm_storage: local-lvm      # default disk storage, used by VMs that don't set their own `storage`
+proxmox_iso: local:iso/rhel-9-x86_64-dvd.iso   # CHANGE: default ISO (storage:iso/<file> already uploaded to Proxmox), used by ISO based VMs without their own `iso`
+
+# cloud-init settings for template based VMs
+proxmox_ci_user: cloud-user                    # default user of the RHEL cloud image
+proxmox_ssh_public_key_file: "{{ ansible_env.HOME }}/.ssh/id_ed25519.pub"   # key injected into the VMs
+proxmox_search_domain: lab.local
+proxmox_template_disk: scsi0                   # disk of the template that is resized to `disk_gb`
+proxmox_dhcp_network_snippet: local:snippets/dhcp-network.yaml   # cloud-init network config for DHCP VMs (see installation/01 - proxmox.md)
+
+# VMs to create. Add new nodes here. Keep specs/IPs in sync with architecture/architecture.md.
+# - with `template`: cloned from that Proxmox template and configured with cloud-init (user, SSH key)
+#     with `ip` (+ gateway, dns): static address - only for dhcp and dns, which everything else depends on
+#     without `ip`: address, gateway and DNS from the lab DHCP (add the MAC to dhcp_reservations)
+# - without `template`: created empty and booted from an ISO (`iso`, or proxmox_iso)
+# optional: Proxmox storage for this VM's disk (overrides proxmox_vm_storage)
+proxmox_vms:
+  - name: dhcp
+    vmid: 801
+    cores: 1
+    memory_mb: 2148
+    disk_gb: 50
+    storage: ssd2-thin             
+    template: rhel9-template 
+    bridge: ocp
+    mac: "BC:24:11:00:00:03"
+    ip: 10.10.0.3
+    gateway: 10.10.0.2
+    dns: 1.1.1.1                   # upstream resolver: this VM is built before the lab DNS serves
+  - name: dns
+    vmid: 802
+    cores: 1
+    memory_mb: 2148
+    disk_gb: 50
+    storage: ssd2-thin             
+    template: rhel9-template 
+    bridge: ocp
+    mac: "BC:24:11:00:00:04"
+    ip: 10.10.0.4
+    gateway: 10.10.0.2
+    dns: 1.1.1.1                   # upstream resolver: it cannot use itself before named is installed
+  - name: registry
+    vmid: 803
+    cores: 2
+    memory_mb: 8192                # mirror registry minimum (Quay + PostgreSQL + Redis); 4 GB gets OOM-killed during the install
+    disk_gb: 300
+    storage: hdd             
+    template: rhel9-template 
+    bridge: ocp
+    mac: "BC:24:11:00:00:05"       # no ip: address, gateway and DNS come from DHCP (reservation in dhcp_reservations)
+
+# ---- OCP network ----
+lab_domain: lab.local
+lab_subnet: 10.10.0.0
+lab_netmask: 255.255.255.0
+lab_broadcast: 10.10.0.255
+lab_gateway: 10.10.0.2             # the bastion routes and NATs the OCP network
+lab_upstream_dns:                  # where the lab DNS forwards names it does not own
+  - 1.1.1.1
+  - 8.8.8.8
+
+# ---- DNS server (10.10.0.4), see tasks/configure-dns.yaml ----
+dns_server_ip: 10.10.0.4
+dns_reverse_zone: 0.10.10.in-addr.arpa
+dns_zone_serial: 2026101302        # bump this whenever you change the records below
+dns_allow_query:                   # networks allowed to query the lab DNS
+  - 10.10.0.0/24
+  - 10.0.0.0/24
+
+dns_records:                       # A records for the lab infrastructure
+  - { name: bastion, ip: 10.10.0.2 }
+  - { name: dhcp, ip: 10.10.0.3 }
+  - { name: dns, ip: 10.10.0.4 }
+  - { name: registry, ip: 10.10.0.5 }
+
+ocp_cluster_name: ocp4             # cluster records: <name>.<ocp_cluster_name>.lab.local
+dns_ocp_records:                   # CHANGE when the cluster VMs are defined
+  - { name: "api.ocp4", ip: 10.10.0.10 }
+  - { name: "api-int.ocp4", ip: 10.10.0.10 }
+  - { name: "*.apps.ocp4", ip: 10.10.0.11 }
+  - { name: "master01.ocp4", ip: 10.10.0.21 }
+  - { name: "master02.ocp4", ip: 10.10.0.22 }
+  - { name: "master03.ocp4", ip: 10.10.0.23 }
+  - { name: "worker01.ocp4", ip: 10.10.0.31 }
+  - { name: "worker02.ocp4", ip: 10.10.0.32 }
+
+# ---- DHCP server (10.10.0.3), see tasks/configure-dhcp.yaml ----
+dhcp_server_ip: 10.10.0.3
+dhcp_range_start: 10.10.0.200
+dhcp_range_end: 10.10.0.250
+dhcp_lease_time: 600
+dhcp_max_lease_time: 7200
+dhcp_reservations:                 # fixed leases; the MAC must match proxmox_vms and the IP dns_records
+  - { name: registry, mac: "BC:24:11:00:00:05", ip: 10.10.0.5 }
+#   - { name: master01, mac: "BC:24:11:00:00:21", ip: 10.10.0.21 }
+
+# Lab CA (created on the bastion, see tasks/configure-bastion.yaml)
+lab_ca_dir: "{{ lookup('env', 'HOME') }}/lab-ca"
+lab_certs:                          # one server certificate is generated for each name
+  - registry.lab.local
+
+# Mirror registry (Quay), installed by tasks/configure-registry.yaml
+quay_hostname: registry.lab.local
+quay_root: /opt/quay
+quay_init_user: init                # the password is quay_init_password in vars/secrets.yaml

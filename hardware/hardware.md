@@ -27,3 +27,13 @@ For this server the hypervisor of choice is Proxmox. This will enable us to crea
 Very simple and flat network for our setup. We will create a bridge for internal traffic and one for external network traffic.
 
 ![Network diagram](network-diagram.png)
+
+### Bridges
+In my lab, I created the network bridges as in the picture.
+
+```
+vmbr0 - This is connected to my home network
+ocp - My isolated OCP network
+```
+
+![Network Bridges](network-briges.png)
